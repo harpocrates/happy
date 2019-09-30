@@ -31,8 +31,13 @@ ppRule (Rule name _ prods _) = text name
 ppProd :: Prod -> Doc
 ppProd (Prod ts _ _ p) = psDoc <+> precDoc
   where
-  psDoc   = if null ts then text "{- empty -}" else hsep (map ppTerm ts)
+  psDoc   = if null ts then text "{- empty -}" else hsep (map ppInlineTerm ts)
   precDoc = maybe empty (\x -> text "%prec" <+> text x) p
+  ppInlineTerm (t,i) = ppInline i <+> ppTerm t
+
+ppInline :: IsInline -> Doc
+ppInline IsInline = text "%inline"
+ppInline NotInline = empty
 
 ppTerm :: Term -> Doc
 ppTerm (App x ts) = text x <> ppTuple (map ppTerm ts)

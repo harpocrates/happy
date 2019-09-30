@@ -1,4 +1,4 @@
-module ParamRules(expand_rules, Prod1(..), Rule1(..)) where
+module ParamRules(expand_rules, Prod1(..), Rule1(..), RuleName, Subst) where
 
 import AbsSyn
 import Control.Monad.Writer
@@ -27,7 +27,7 @@ newtype Funs  = Funs (M.Map RuleName Rule)
 data Rule1    = Rule1 RuleName [Prod1] (Maybe (String, Subst))
 
 -- | Similar to 'Prod', but `Term`'s have been flattened into `RuleName`'s
-data Prod1    = Prod1 [RuleName] String Int (Maybe String)
+data Prod1    = Prod1 [(RuleName, IsInline)] String Int (Maybe String)
 
 inst_name :: Inst -> RuleName
 inst_name (Inst f [])  = f
@@ -46,19 +46,17 @@ from_term s (App f [])  = return $ case lookup f s of
                             Just g  -> g
                             Nothing -> f
 
-from_term s (App f ts)  = do xs <- from_terms s ts
+from_term s (App f ts)  = do xs <- mapM (from_term s) ts
                              let i = Inst f xs
                              tell (S.singleton i)
                              return $ inst_name i
 
--- | Collects the instances arising from a list of terms.
-from_terms :: Subst -> [Term] -> M1 [RuleName]
-from_terms s ts = mapM (from_term s) ts
-
 -- XXX: perhaps change the line to the line of the instance
 inst_prod :: Subst -> Prod -> M1 Prod1
-inst_prod s (Prod ts c l p)  = do xs <- from_terms s ts
+inst_prod s (Prod ts c l p)  = do xs <- mapM from_term' ts
                                   return (Prod1 xs c l p)
+  where from_term' :: (Term, IsInline) -> M1 (RuleName, IsInline)
+        from_term' (t, i) = fmap (\r -> (r,i)) (from_term s t)
 
 inst_rule :: Rule -> [RuleName] -> M2 Rule1
 inst_rule (Rule x xs ps t) ts  = do s <- build xs ts []

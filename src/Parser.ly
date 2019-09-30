@@ -29,6 +29,7 @@ The parser.
 >       spec_left       { TokenKW      TokSpecId_Left }
 >       spec_right      { TokenKW      TokSpecId_Right }
 >       spec_prec       { TokenKW      TokSpecId_Prec }
+>       spec_inline     { TokenKW      TokSpecId_Inline }
 >       spec_expect     { TokenKW      TokSpecId_Expect }
 >       spec_error      { TokenKW      TokSpecId_Error }
 >       spec_errorhandlertype   { TokenKW      TokSpecId_ErrorHandlerType }
@@ -83,13 +84,15 @@ The parser.
 >       : id                             { App $1 [] }
 >       | id "(" comma_terms ")"         { App $1 (reverse $3) }
 
-> terms :: { [Term] }
+> terms :: { [(Term, IsInline)] }
 >       : terms_rev                      { reverse $1 }
 >       |                                { [] }
 
-> terms_rev :: { [Term] }
->       : term                           { [$1] }
->       | terms_rev term                 { $2 : $1 }
+> terms_rev :: { [(Term, IsInline)] }
+>       :             term               { [($1, NotInline)] }
+>       | spec_inline term               { [($2, IsInline)]  }
+>       | terms_rev             term     { ($2, NotInline) : $1 }
+>       | terms_rev spec_inline term     { ($3, IsInline)  : $1 }
 
 > comma_terms :: { [Term] }
 >       : term                           { [$1] }

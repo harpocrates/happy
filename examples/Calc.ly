@@ -1,6 +1,5 @@
 > {
-> module Calc where
-> import Char
+> import Data.Char
 > }
 
 First thing to declare is the name of your parser,
@@ -42,14 +41,16 @@ Now we have the production rules.
 >      | Exp1 '-' Term		{ Minus $1 $3 }
 >      | Term			{ Term $1 }
 > 
-> Term : Term '*' Factor	{ Times $1 $3 }
->      | Term '/' Factor	{ Div $1 $3 }
+> Term : Term %inline op Factor	{ $2 $1 $3 }
 >      | Factor			{ Factor $1 }
 > 
 > Factor : int			{ Int $1 }
 > 	 | var			{ Var $1 }
 > 	 | '(' Exp ')'		{ Brack $2 }
-
+>
+> op : '*' { Times }
+>    | '/' { Div }
+>
 We are simply returning the parsed data structure !
 Now we need some extra code, to support this parser,
 and make in complete:
@@ -113,20 +114,20 @@ The datastructure for the tokens...
 To run the program, call this in gofer, or use some code
 to print it.
 
- runCalc :: String -> Exp
- runCalc = calc . lexer
+> runCalc :: String -> Exp
+> runCalc = calc . lexer
 
 Here we test our parser.
 
- main = case runCalc "1 + 2 + 3" of {
-	(Exp1 (Plus (Plus (Term (Factor (Int 1))) (Factor (Int 2))) (Factor (Int 3))))  ->
- 	case runCalc "1 * 2 + 3" of {
-	(Exp1 (Plus (Term (Times (Factor (Int 1)) (Int 2))) (Factor (Int 3)))) ->
-	case runCalc "1 + 2 * 3" of {
-	(Exp1 (Plus (Term (Factor (Int 1))) (Times (Factor (Int 2)) (Int 3)))) ->
-	case runCalc "let x = 2 in x * (x - 2)" of {
-	(Let "x" (Exp1 (Term (Factor (Int 2)))) (Exp1 (Term (Times (Factor (Var "x")) (Brack (Exp1 (Minus (Term (Factor (Var "x"))) (Factor (Int 2))))))))) -> print "AndysTest works\n" ; 
-	_ -> quit } ; _ -> quit } ; _ -> quit } ; _ -> quit }
- quit = print "runCalc failed\n"
+> main = case runCalc "1 + 2 + 3" of {
+>	(Exp1 (Plus (Plus (Term (Factor (Int 1))) (Factor (Int 2))) (Factor (Int 3))))  ->
+> 	case runCalc "1 * 2 + 3" of {
+>	(Exp1 (Plus (Term (Times (Factor (Int 1)) (Int 2))) (Factor (Int 3)))) ->
+>	case runCalc "1 + 2 * 3" of {
+>	(Exp1 (Plus (Term (Factor (Int 1))) (Times (Factor (Int 2)) (Int 3)))) ->
+>	case runCalc "let x = 2 in x * (x - 2)" of {
+>	(Let "x" (Exp1 (Term (Factor (Int 2)))) (Exp1 (Term (Times (Factor (Var "x")) (Brack (Exp1 (Minus (Term (Factor (Var "x"))) (Factor (Int 2))))))))) -> print "AndysTest works\n" ; 
+>	_ -> quit } ; _ -> quit } ; _ -> quit } ; _ -> quit }
+> quit = print "runCalc failed\n"
 
 > }

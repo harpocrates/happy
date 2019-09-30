@@ -24,11 +24,15 @@ Here is our mid-section datatype
 > import AttrGrammar
 > import AttrGrammarParser
 > import ParamRules
+> import InlineRules
 
 > import Data.Array
 > import Data.Char
 > import Data.List
 > import Data.Maybe (fromMaybe)
+
+> import Data.Set ( Set )
+> import qualified Data.Set as S
 
 > import Control.Monad.Writer
 
@@ -179,14 +183,15 @@ This bit is a real mess, mainly because of the error message support.
 >   where (g, errs) = runWriter (manglerM file abssyn)
 
 > manglerM :: FilePath -> AbsSyn -> M Grammar
-> manglerM file (AbsSyn _hd dirs rules' _tl) =
+> manglerM file (AbsSyn _hd dirs rules'' _tl) =
 >   -- add filename to all error messages
 >   mapWriter (\(a,e) -> (a, map (\s -> file ++ ": " ++ s) e)) $ do
 
->   rules <- case expand_rules rules' of
+>   rules' <- case expand_rules rules'' of
 >              Left err -> addErr err >> return []
 >              Right as -> return as
->   nonterm_strs <- checkRules [n | Rule1 n _ _ <- rules] "" []
+>   let rules = inline_rules rules'
+>   nonterm_strs <- checkRules [n | Rule2 n _ _ <- rules] "" []
 
 >   let
 
@@ -263,7 +268,7 @@ Deal with priorities...
 
 Translate the rules from string to name-based.
 
->       convNT (Rule1 nt prods ty)
+>       convNT (Rule2 nt prods ty)
 >         = do nt' <- mapToName nt
 >              return (nt', prods, ty)
 >
@@ -273,8 +278,8 @@ Translate the rules from string to name-based.
 >       transRule (nt, prods, _ty)
 >         = mapM (finishRule nt) prods
 >
->       finishRule :: Name -> Prod1 -> Writer [ErrMsg] Production
->       finishRule nt (Prod1 lhs code line prec)
+>       finishRule :: Name -> Prod2 -> Writer [ErrMsg] Production
+>       finishRule nt (Prod2 lhs code line prec)
 >         = mapWriter (\(a,e) -> (a, map (addLine line) e)) $ do
 >           lhs' <- mapM mapToName lhs
 >           code' <- checkCode (length lhs) lhs' nonterm_names code attrs
@@ -300,7 +305,7 @@ Translate the rules from string to name-based.
 >   rules2 <- mapM transRule rules1
 
 >   let
->       type_env = [(nt, t) | Rule1 nt _ (Just (t,[])) <- rules] ++
+>       type_env = [(nt, t) | Rule2 nt _ (Just (t,[])) <- rules] ++
 >                  [(nt, getTokenType dirs) | nt <- terminal_strs] -- XXX: Doesn't handle $$ type!
 >
 >       fixType (ty,s) = go "" ty
@@ -407,9 +412,10 @@ So is this.
 -- If any attribute directives were used, we are in an attribute grammar, so
 -- go do special processing.  If not, pass on to the regular processing routine
 
-> checkCode :: Int -> [Name] -> [Name] -> String -> [(String,String)] -> M (String,[Int])
-> checkCode arity _   _             code []    = doCheckCode arity code
-> checkCode arity lhs nonterm_names code attrs = rewriteAttributeGrammar arity lhs nonterm_names code attrs
+> checkCode :: Int -> [Name] -> [Name] -> InlinedCode -> [(String,String)] -> M (String,[Int])
+> checkCode arity _   _             code []              = doCheckCode arity code
+> checkCode arity lhs nonterm_names (Code code []) attrs = rewriteAttributeGrammar arity lhs nonterm_names code attrs
+> checkCode _     _   _             _             _attrs = error "%inline for attribute grammars is unimplemented"
 
 ------------------------------------------------------------------------------
 -- Special processing for attribute grammars.  We re-parse the body of the code
@@ -543,37 +549,126 @@ So is this.
 -- At the same time, we collect a list of the variables actually used in this
 -- code, which is used by the backend.
 
-> doCheckCode :: Int -> String -> M (String, [Int])
-> doCheckCode arity code0 = go code0 "" []
->   where go code acc used =
->           case code of
->               [] -> return (reverse acc, used)
->
->               '"'  :r    -> case reads code :: [(String,String)] of
->                                []       -> go r ('"':acc) used
->                                (s,r'):_ -> go r' (reverse (show s) ++ acc) used
->               a:'\'' :r | isAlphaNum a -> go r ('\'':a:acc) used
->               '\'' :r    -> case reads code :: [(Char,String)] of
->                                []       -> go r  ('\'':acc) used
->                                (c,r'):_ -> go r' (reverse (show c) ++ acc) used
->               '\\':'$':r -> go r ('$':acc) used
->
->               '$':'>':r -- the "rightmost token"
->                       | arity == 0 -> do addErr "$> in empty rule"
->                                          go r acc used
->                       | otherwise  -> go r (reverse (mkHappyVar arity) ++ acc)
->                                        (arity : used)
->
->               '$':r@(i:_) | isDigit i ->
->                       case reads r :: [(Int,String)] of
->                         (j,r'):_ ->
->                            if j > arity
->                                 then do addErr ('$': show j ++ " out of range")
->                                         go r' acc used
->                                 else go r' (reverse (mkHappyVar j) ++ acc)
->                                        (j : used)
->                         [] -> error "doCheckCode []"
->               c:r  -> go r (c:acc) used
+> doCheckCode
+>   :: Int         -- arity 
+>   -> InlinedCode -- code for this segment
+>   -> M ( String    -- output code
+>        , [Int] )   -- variable positions used
+> doCheckCode arity ic = do ( code, _, used  ) <- go 1 ic
+>                           return ( code, S.toList used )
+>   where
+>     go
+>       :: Int          -- current variable position
+>       -> InlinedCode  -- code for this segment
+>       -> M ( String     -- output code
+>            , Int        -- next variable position
+>            , Set Int )  -- variable positions used
+>     go pos (Code c is) = do ( args, pos' ) <- goRec pos is
+>                             ( c', used ) <- codeLoop c "" S.empty args
+>                             let getVars i = case args !! (i - 1) of
+>                                               Left (_, vs) -> vs
+>                                               Right v -> S.singleton v
+>                             let varPosUsed = S.unions (S.map getVars used)
+>                             let usedInlines = [ \innerCode -> concat [ "case (", code, ") of { ", mkHappyInlined j', " ->\n", innerCode, "}" ]
+>                                               | (j', j) <- zip [1..] (S.toAscList used)
+>                                               , Left (code, _) <- [args !! (j - 1)] ]
+>                             let c'' = foldr ($) c' usedInlines
+>                             return ( c'', pos', varPosUsed )
+>    
+> 
+>     goRec
+>       :: Int                    -- starting position
+>       -> [Maybe InlinedCode]    -- inlined code segments
+>       -> M ( [Either
+>                (String, Set Int)  -- processed code segments and variables used
+>                Int                -- variable
+>              ]
+>            , Int )                -- next starting position
+>     goRec pos []           = return ( [], pos )
+>     goRec pos (Nothing:is) = do ( cs'', pos' ) <- goRec (pos + 1) is
+>                                 return ( Right pos : cs'', pos' )
+>     goRec pos (Just ic:is) = do ( c, pos', used ) <- go pos ic
+>                                 ( cs'', pos'' ) <- goRec pos' is
+>                                 return ( Left (c, used) : cs'', pos'' )
+> 
+>     codeLoop
+>       :: String        -- input code (with `$`'s)
+>       -> String        -- output code, reversed
+>       -> Set Int       -- used variables, accumulator
+>       -> [ Either (String, Set Int) Int ]
+>       -> M ( String
+>            , Set Int ) -- variable positions used, but as indices in `forVars`!
+>     codeLoop code acc used forVars = 
+>       case code of
+>         [] -> return (reverse acc, used)
+>  
+>         '"'  :r    -> case reads code :: [(String,String)] of
+>                          []       -> codeLoop r ('"':acc) used forVars
+>                          (s,r'):_ -> codeLoop r' (reverse (show s) ++ acc) used forVars
+>         a:'\'' :r | isAlphaNum a -> codeLoop r ('\'':a:acc) used forVars
+>         '\'' :r    -> case reads code :: [(Char,String)] of
+>                          []       -> codeLoop r  ('\'':acc) used forVars
+>                          (c,r'):_ -> codeLoop r' (reverse (show c) ++ acc) used forVars
+>         '\\':'$':r -> codeLoop r ('$':acc) used forVars
+>  
+>         '$':'>':r -- the "rightmost token"
+>                 | null forVars -> do addErr "$> in empty rule"
+>                                      codeLoop r acc used forVars
+>                 | otherwise  -> codeLoop r (reverse (mkHappyInlined (length forVars)) ++ acc)
+>                                      (S.insert (length forVars) used) forVars
+>  
+>         '$':r@(i:_) | isDigit i ->
+>                 case reads r :: [(Int,String)] of
+>                   (j,r'):_ ->
+>                      if j < 1 || j > length forVars
+>                           then do addErr ('$': show j ++ " out of range: " ++ show (length forVars))
+>                                   codeLoop r' acc used forVars
+>                           else case forVars !! (j - 1) of
+>                                  Right j' -> codeLoop r' (reverse (mkHappyVar j') ++ acc)
+>                                                 (S.insert j used) forVars
+>                                  Left _   -> codeLoop r' (reverse (mkHappyInlined j) ++ acc)
+>                                                 (S.insert j used) forVars
+>                   [] -> error "doCheckCode []"
+>         c:r  -> codeLoop r (c:acc) used forVars
+> 
+> mkHappyInlined :: Int -> String
+> mkHappyInlined n = "happy_var_inlined_" ++ show n
+
+> (!!!) :: Show a => [a] -> Int -> a
+> (!!!) ls ix | ix < length ls = ls !! ix
+>             | otherwise = error ("Index OOB: " ++ show ix ++ " " ++ show ls)
+
+doCheckCode :: Int -> InlinedCode -> M (String, [Int])
+doCheckCode arity ic@(Code code0 inlined0) = go code0 "" []
+  where go code acc used =
+          case code of
+              [] -> return (reverse acc, used)
+
+              '"'  :r    -> case reads code :: [(String,String)] of
+                               []       -> go r ('"':acc) used
+                               (s,r'):_ -> go r' (reverse (show s) ++ acc) used
+              a:'\'' :r | isAlphaNum a -> go r ('\'':a:acc) used
+              '\'' :r    -> case reads code :: [(Char,String)] of
+                               []       -> go r  ('\'':acc) used
+                               (c,r'):_ -> go r' (reverse (show c) ++ acc) used
+              '\\':'$':r -> go r ('$':acc) used
+
+              '$':'>':r -- the "rightmost token"
+                      | arity == 0 -> do addErr "$> in empty rule"
+                                         go r acc used
+                      | otherwise  -> go r (reverse (mkHappyVar arity) ++ acc)
+                                       (arity : used)
+
+              '$':r@(i:_) | isDigit i ->
+                      case reads r :: [(Int,String)] of
+                        (j,r'):_ ->
+                           if j > arity
+                                then do addErr ('$': show j ++ " out of range: " ++ show ic ++ ", arity: " ++ show arity)
+                                        go r' acc used
+                                else go r' (reverse (mkHappyVar j) ++ acc)
+                                       (j : used)
+                        [] -> error "doCheckCode []"
+              c:r  -> go r (c:acc) used
 
 > mkHappyVar :: Int -> String
 > mkHappyVar n  = "happy_var_" ++ show n

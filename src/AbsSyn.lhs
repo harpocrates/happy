@@ -12,7 +12,7 @@ Here is the abstract syntax of the language we parse.
 >       getImportedIdentity, getMonad, getError,
 >       getPrios, getPrioNames, getExpect, getErrorHandlerType,
 >       getAttributes, getAttributetype,
->       Rule(..), Prod(..), Term(..)
+>       Rule(..), Prod(..), IsInline(..), Term(..)
 >  ) where
 
 > data AbsSyn
@@ -31,17 +31,17 @@ Here is the abstract syntax of the language we parse.
 
 > data Prod
 >     = Prod
->         [Term]               -- terms that make up the rule
+>         [(Term, IsInline)]   -- terms that make up the rule
 >         String               -- code body that runs when the rule reduces
 >         Int                  -- line number
 >         (Maybe String)       -- inline precedence annotation for the rule
+
+> data IsInline = IsInline | NotInline
 
 > data Term
 >     = App
 >         String               -- name of the term
 >         [Term]               -- parameter arguments (usually this is empty)
-
-
 
 #ifdef DEBUG
 

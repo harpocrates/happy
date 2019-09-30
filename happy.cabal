@@ -158,6 +158,7 @@ flag small_base
   manual: True
 
 executable happy
+  cpp-options:       -DDEBUG
   hs-source-dirs: src
   main-is: Main.lhs
 
@@ -188,6 +189,7 @@ executable happy
         AttrGrammarParser
         ParamRules
         PrettyGrammar
+        InlineRules
 
 test-suite tests
   type: exitcode-stdio-1.0
